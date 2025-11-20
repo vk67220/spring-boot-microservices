@@ -1,0 +1,223 @@
+version: "3.9"
+
+services:
+
+  # ----------------------
+  # Zookeeper
+  # ----------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Kafka
+  # ----------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Eureka Discovery Server
+  # ----------------------
+  eureka:
+    build: ./discovery-service
+    ports:
+      - "8761:8761"
+    environment:
+      SPRING_SECURITY_USER_NAME: eureka
+      SPRING_SECURITY_USER_PASSWORD: password
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: prometheus
+    networks:
+      - ms-net
+
+  # ----------------------
+  # API Gateway
+  # ----------------------
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8181:8181"
+    depends_on:
+      - eureka
+      - keycloak
+      - zipkin
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:password@eureka:8761/eureka
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/spring-boot-microservices-realm
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+      SERVER_PORT: 8181
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Product Service (MongoDB)
+  # ----------------------
+  product-service:
+    build: ./product-service
+    ports:
+      - "8082:8082"
+    depends_on:
+      - eureka
+      - mongodb
+    environment:
+      SPRING_DATA_MONGODB_HOST: mongodb
+      SPRING_DATA_MONGODB_PORT: 27017
+      SPRING_DATA_MONGODB_DATABASE: product-service
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:password@eureka:8761/eureka
+      SERVER_PORT: 8082
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Inventory Service (MySQL)
+  # ----------------------
+  inventory-service:
+    build: ./inventory-service
+    ports:
+      - "8083:8083"
+    depends_on:
+      - eureka
+      - mysql
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/inventory_service
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: mysql
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:password@eureka:8761/eureka
+      SERVER_PORT: 8083
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Order Service (MySQL + Kafka)
+  # ----------------------
+  order-service:
+    build: ./order-service
+    ports:
+      - "8081:8081"
+    depends_on:
+      - eureka
+      - mysql
+      - kafka
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/order_service
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: mysql
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:password@eureka:8761/eureka
+      SERVER_PORT: 8081
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Notification Service (Kafka)
+  # ----------------------
+  notification-service:
+    build: ./notification-service
+    ports:
+      - "8084:8084"
+    depends_on:
+      - eureka
+      - kafka
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:password@eureka:8761/eureka
+      SERVER_PORT: 8084
+    networks:
+      - ms-net
+
+  # ----------------------
+  # MySQL for Order & Inventory
+  # ----------------------
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: mysql
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - ms-net
+
+  # ----------------------
+  # MongoDB for Product
+  # ----------------------
+  mongodb:
+    image: mongo:6
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Keycloak Authentication Server
+  # ----------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0.7
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    volumes:
+      - ./realms:/opt/keycloak/data/import
+    ports:
+      - "8080:8080"
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Zipkin Tracing
+  # ----------------------
+  zipkin:
+    image: openzipkin/zipkin
+    ports:
+      - "9411:9411"
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Prometheus Monitoring
+  # ----------------------
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - ms-net
+
+  # ----------------------
+  # Grafana Dashboards
+  # ----------------------
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./Grafana_Dashboard.json:/var/lib/grafana/dashboards/dashboard.json
+    networks:
+      - ms-net
+
+volumes:
+  mysql_data:
+  mongo_data:
+
+networks:
+  ms-net:
